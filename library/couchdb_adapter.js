@@ -1,3 +1,6 @@
+var get = Ember.get, set = Ember.set;
+
+
 DS.CouchDBSerializer = DS.JSONSerializer.extend({
   typeAttribute: 'ember_type',
   addEmptyHasMany: false,
@@ -14,6 +17,26 @@ DS.CouchDBSerializer = DS.JSONSerializer.extend({
     return json;
   },
 
+  extractMany: function(loader, json, type, records) {
+    var root = this.rootForType(type);
+    root = this.pluralize(root);
+
+    this.sideload(loader, type, json, root);
+    this.extractMeta(loader, type, json);
+
+    if (json[root]) {
+      var objects = json[root], references = [];
+
+      if (records) { records = records.toArray(); }
+      for (var i = 0; i < objects.length; i++) {
+        if (records) { loader.updateId(records[i], objects[i]); }
+        var reference = this.extractRecordRepresentation(loader, type, objects[i]);
+        references.push(reference);
+      }
+
+      loader.populateArray(references);
+    }
+  },
   extract: function(loader, json, type) {
     this.extractRecordRepresentation(loader, type, json);
   },
@@ -43,13 +66,13 @@ DS.CouchDBSerializer = DS.JSONSerializer.extend({
   },
   addHasMany: function(data, record, key, relationship) {
     var value = record.get(key);
-    if (this.get('addEmptyHasMany') || !Ember.empty(value)) {
+    if (this.get('addEmptyHasMany') || !Ember.isEmpty(value)) {
       data[key] = value.getEach('id');
     }
   },
   addBelongsTo: function(hash, record, key, relationship) {
     var id = get(record, relationship.key + '.id');
-    if (this.get('addEmptyBelongsTo') || !Ember.empty(id)) {
+    if (this.get('addEmptyBelongsTo') || !Ember.isEmpty(id)) {
       hash[key] = id;
     }
   }
@@ -63,16 +86,23 @@ DS.CouchDBAdapter = DS.Adapter.extend({
   serializer: DS.CouchDBSerializer,
 
   _ajax: function(url, type, hash) {
+    // MODIFICATION - use a baseURL with couchdb CORS
+    var baseUrl = this.get('baseUrl');
+    url = baseUrl + url;
     hash.url = url;
     hash.type = type;
     hash.dataType = 'json';
     hash.contentType = 'application/json; charset=utf-8';
     hash.context = this;
-
+    hash.crossDomain = true;
+    if (this.get('useBasicAuth')) {
+      hash.xhrFields = {
+        withCredentials: true
+      }
+    }
     if (hash.data && type !== 'GET') {
       hash.data = JSON.stringify(hash.data);
     }
-
     Ember.$.ajax(hash);
   },
 
@@ -90,9 +120,13 @@ DS.CouchDBAdapter = DS.Adapter.extend({
   },
 
   find: function(store, type, id) {
+    console.log('FIND CALLED WITH ID: '  + id);
     this.ajax(id, 'GET', {
       context: this,
       success: function(data) {
+        console.log(data);
+        console.log(type);
+        console.log(id);
         this.didFindRecord(store, type, data, id);
       }
     });
@@ -113,11 +147,21 @@ DS.CouchDBAdapter = DS.Adapter.extend({
 
   findQuery: function(store, type, query, modelArray) {
     var designDoc = this.get('designDoc');
+    query.options.include_docs = true;
     if (query.type === 'view') {
       this.ajax('_design/%@/_view/%@'.fmt(query.designDoc || designDoc, query.viewName), 'GET', {
         data: query.options,
         success: function(data) {
-          modelArray.load(data.rows.getEach('doc'));
+          var dataArray = new Array();
+          data.rows.forEach(function(row){
+            dataArray.push(row.doc);
+          });
+          resultObject = { "text_areas" : data.rows.getEach('doc')}
+          this.didFindQuery(store, 
+                            type, 
+                            resultObject,
+                            modelArray
+                           );
         },
         context: this
       });
@@ -144,7 +188,7 @@ DS.CouchDBAdapter = DS.Adapter.extend({
         context: this,
         data: {
           include_docs: true,
-          key: encodeURI('"' + typeString + '"')
+          key: '"' + typeString + '"'
         },
         success: function(data) {
           store.loadMany(type, data.rows.getEach('doc'));
