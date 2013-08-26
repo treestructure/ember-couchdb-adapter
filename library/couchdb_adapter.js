@@ -21,21 +21,13 @@ DS.CouchDBSerializer = DS.JSONSerializer.extend({
     var root = this.rootForType(type);
     root = this.pluralize(root);
 
-    this.sideload(loader, type, json, root);
-    this.extractMeta(loader, type, json);
+    // building new json Object with root key
+    jsonNew = {};
+    jsonNew[root] = json
+    json = jsonNew
 
-    if (json[root]) {
-      var objects = json[root], references = [];
+    this._super(loader, jsonNew, type, records);
 
-      if (records) { records = records.toArray(); }
-      for (var i = 0; i < objects.length; i++) {
-        if (records) { loader.updateId(records[i], objects[i]); }
-        var reference = this.extractRecordRepresentation(loader, type, objects[i]);
-        references.push(reference);
-      }
-
-      loader.populateArray(references);
-    }
   },
   extract: function(loader, json, type) {
     this.extractRecordRepresentation(loader, type, json);
@@ -124,9 +116,6 @@ DS.CouchDBAdapter = DS.Adapter.extend({
     this.ajax(id, 'GET', {
       context: this,
       success: function(data) {
-        console.log(data);
-        console.log(type);
-        console.log(id);
         this.didFindRecord(store, type, data, id);
       }
     });
@@ -152,14 +141,9 @@ DS.CouchDBAdapter = DS.Adapter.extend({
       this.ajax('_design/%@/_view/%@'.fmt(query.designDoc || designDoc, query.viewName), 'GET', {
         data: query.options,
         success: function(data) {
-          var dataArray = new Array();
-          data.rows.forEach(function(row){
-            dataArray.push(row.doc);
-          });
-          resultObject = { "text_areas" : data.rows.getEach('doc')}
           this.didFindQuery(store, 
                             type, 
-                            resultObject,
+                            data.rows.getEach('doc'),
                             modelArray
                            );
         },
